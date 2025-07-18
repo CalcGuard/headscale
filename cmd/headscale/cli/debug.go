@@ -117,7 +117,7 @@ var createNodeCmd = &cobra.Command{
 		if err != nil {
 			ErrorOutput(
 				err,
-				"Cannot create node: "+status.Convert(err).Message(),
+				fmt.Sprintf("Cannot create node: %s", status.Convert(err).Message()),
 				output,
 			)
 		}

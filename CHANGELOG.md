@@ -1,76 +1,11 @@
 # CHANGELOG
 
-## Next
-
-### Database integrity improvements
-
-This release includes a significant database migration that addresses longstanding
-issues with the database schema and data integrity that has accumulated over the
-years. The migration introduces a `schema.sql` file as the source of truth for
-the expected database schema to ensure new migrations that will cause divergence
-does not occur again.
-
-These issues arose from a combination of factors discovered over time: SQLite
-foreign keys not being enforced for many early versions, all migrations being
-run in one large function until version 0.23.0, and inconsistent use of GORM's
-AutoMigrate feature. Moving forward, all new migrations will be explicit SQL
-operations rather than relying on GORM AutoMigrate, and foreign keys will be
-enforced throughout the migration process.
-
-We are only improving SQLite databases with this change - PostgreSQL databases
-are not affected.
-
-Please read the [PR description](https://github.com/juanfont/headscale/pull/2617)
-for more technical details about the issues and solutions.
-
-**SQLite Database Backup Example:**
-```bash
-# Stop headscale
-systemctl stop headscale
-
-# Backup sqlite database
-cp /var/lib/headscale/db.sqlite /var/lib/headscale/db.sqlite.backup
-
-# Backup sqlite WAL/SHM files (if they exist)
-cp /var/lib/headscale/db.sqlite-wal /var/lib/headscale/db.sqlite-wal.backup
-cp /var/lib/headscale/db.sqlite-shm /var/lib/headscale/db.sqlite-shm.backup
-
-# Start headscale (migration will run automatically)
-systemctl start headscale
-```
-
-### BREAKING
-
-- Remove support for 32-bit binaries
-  [#2692](https://github.com/juanfont/headscale/pull/2692)
-- Policy: Zero or empty destination port is no longer allowed
-  [#2606](https://github.com/juanfont/headscale/pull/2606)
-
-### Changes
-
-- **Database schema migration improvements for SQLite**
-  [#2617](https://github.com/juanfont/headscale/pull/2617)
-  - **IMPORTANT: Backup your SQLite database before upgrading**
-  - Introduces safer table renaming migration strategy
-  - Addresses longstanding database integrity issues
-
-- Remove policy v1 code [#2600](https://github.com/juanfont/headscale/pull/2600)
-- Refactor Debian/Ubuntu packaging and drop support for Ubuntu 20.04.
-  [#2614](https://github.com/juanfont/headscale/pull/2614)
-- Support client verify for DERP
-  [#2046](https://github.com/juanfont/headscale/pull/2046)
-- Remove redundant check regarding `noise` config
-  [#2658](https://github.com/juanfont/headscale/pull/2658)
-- Refactor OpenID Connect documentation
-  [#2625](https://github.com/juanfont/headscale/pull/2625)
-- Don't crash if config file is missing
-  [#2656](https://github.com/juanfont/headscale/pull/2656)
-
 ## 0.26.1 (2025-06-06)
 
 ### Changes
 
-- Ensure nodes are matching both node key and machine key when connecting.
+- Ensure nodes are matching both node key and machine key
+  when connecting.
   [#2642](https://github.com/juanfont/headscale/pull/2642)
 
 ## 0.26.0 (2025-05-14)
@@ -188,11 +123,6 @@ working in v1 and not tested might be broken in v2 (and vice versa).
   [#2542](https://github.com/juanfont/headscale/pull/2542)
 - Pre auth key API/CLI now uses ID over username
   [#2542](https://github.com/juanfont/headscale/pull/2542)
-- A non-empty list of global nameservers needs to be specified via
-  `dns.nameservers.global` if the configuration option `dns.override_local_dns`
-  is enabled or is not specified in the configuration file. This aligns with
-  behaviour of tailscale.com.
-  [#2438](https://github.com/juanfont/headscale/pull/2438)
 
 ### Changes
 
@@ -221,8 +151,6 @@ working in v1 and not tested might be broken in v2 (and vice versa).
   [#2438](https://github.com/juanfont/headscale/pull/2438)
 - Add documentation for routes
   [#2496](https://github.com/juanfont/headscale/pull/2496)
-- Add support for `autogroup:member`, `autogroup:tagged`
-  [#2572](https://github.com/juanfont/headscale/pull/2572)
 
 ## 0.25.1 (2025-02-25)
 

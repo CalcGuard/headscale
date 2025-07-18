@@ -11,11 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const (
-	fiveHundred = 500 * time.Millisecond
-	oneHundred  = 100 * time.Millisecond
-	fifty       = 50 * time.Millisecond
-)
+const fiveHundredMillis = 500 * time.Millisecond
+const oneHundredMillis = 100 * time.Millisecond
+const fiftyMillis = 50 * time.Millisecond
 
 // TestEphemeralGarbageCollectorGoRoutineLeak is a test for a goroutine leak in EphemeralGarbageCollector().
 // It creates a new EphemeralGarbageCollector, schedules several nodes for deletion with a short expiry,
@@ -43,7 +41,7 @@ func TestEphemeralGarbageCollectorGoRoutineLeak(t *testing.T) {
 	go gc.Start()
 
 	// Schedule several nodes for deletion with short expiry
-	const expiry = fifty
+	const expiry = fiftyMillis
 	const numNodes = 100
 
 	// Set up wait group for expected deletions
@@ -58,7 +56,7 @@ func TestEphemeralGarbageCollectorGoRoutineLeak(t *testing.T) {
 
 	// Check nodes are deleted
 	deleteMutex.Lock()
-	assert.Len(t, deletedIDs, numNodes, "Not all nodes were deleted")
+	assert.Equal(t, numNodes, len(deletedIDs), "Not all nodes were deleted")
 	deleteMutex.Unlock()
 
 	// Schedule and immediately cancel to test that part of the code
@@ -78,7 +76,7 @@ func TestEphemeralGarbageCollectorGoRoutineLeak(t *testing.T) {
 
 		// Give any potential leaked goroutines a chance to exit
 		// Still need a small sleep here as we're checking for absence of goroutines
-		time.Sleep(oneHundred)
+		time.Sleep(oneHundredMillis)
 
 		// Check for leaked goroutines
 		finalGoroutines := runtime.NumGoroutine()
@@ -114,7 +112,7 @@ func TestEphemeralGarbageCollectorReschedule(t *testing.T) {
 	go gc.Start()
 	defer gc.Close()
 
-	const shortExpiry = fifty
+	const shortExpiry = fiftyMillis
 	const longExpiry = 1 * time.Hour
 
 	nodeID := types.NodeID(1)
@@ -130,7 +128,7 @@ func TestEphemeralGarbageCollectorReschedule(t *testing.T) {
 
 	// Verify that the node was deleted once
 	deleteMutex.Lock()
-	assert.Len(t, deletedIDs, 1, "Node should be deleted exactly once")
+	assert.Equal(t, 1, len(deletedIDs), "Node should be deleted exactly once")
 	assert.Equal(t, nodeID, deletedIDs[0], "The correct node should be deleted")
 	deleteMutex.Unlock()
 }
@@ -157,7 +155,7 @@ func TestEphemeralGarbageCollectorCancelAndReschedule(t *testing.T) {
 	defer gc.Close()
 
 	nodeID := types.NodeID(1)
-	const expiry = fifty
+	const expiry = fiftyMillis
 
 	// Schedule node for deletion
 	gc.Schedule(nodeID, expiry)
@@ -174,7 +172,7 @@ func TestEphemeralGarbageCollectorCancelAndReschedule(t *testing.T) {
 	}
 
 	deleteMutex.Lock()
-	assert.Empty(t, deletedIDs, "Node should not be deleted after cancellation")
+	assert.Equal(t, 0, len(deletedIDs), "Node should not be deleted after cancellation")
 	deleteMutex.Unlock()
 
 	// Reschedule the node
@@ -191,7 +189,7 @@ func TestEphemeralGarbageCollectorCancelAndReschedule(t *testing.T) {
 
 	// Verify final state
 	deleteMutex.Lock()
-	assert.Len(t, deletedIDs, 1, "Node should be deleted after rescheduling")
+	assert.Equal(t, 1, len(deletedIDs), "Node should be deleted after rescheduling")
 	assert.Equal(t, nodeID, deletedIDs[0], "The correct node should be deleted")
 	deleteMutex.Unlock()
 }
@@ -214,7 +212,7 @@ func TestEphemeralGarbageCollectorCloseBeforeTimerFires(t *testing.T) {
 	go gc.Start()
 
 	const longExpiry = 1 * time.Hour
-	const shortExpiry = fifty
+	const shortExpiry = fiftyMillis
 
 	// Schedule node deletion with a long expiry
 	gc.Schedule(types.NodeID(1), longExpiry)
@@ -227,7 +225,7 @@ func TestEphemeralGarbageCollectorCloseBeforeTimerFires(t *testing.T) {
 
 	// Verify that no deletion occurred
 	deleteMutex.Lock()
-	assert.Empty(t, deletedIDs, "No node should be deleted when GC is closed before timer fires")
+	assert.Equal(t, 0, len(deletedIDs), "No node should be deleted when GC is closed before timer fires")
 	deleteMutex.Unlock()
 }
 
@@ -271,7 +269,7 @@ func TestEphemeralGarbageCollectorScheduleAfterClose(t *testing.T) {
 		// Give the GC time to fully close and clean up resources
 		// This is still time-based but only affects when we check the goroutine count,
 		// not the actual test logic
-		time.Sleep(oneHundred)
+		time.Sleep(oneHundredMillis)
 		close(gcClosedCheck)
 	}()
 
@@ -281,7 +279,7 @@ func TestEphemeralGarbageCollectorScheduleAfterClose(t *testing.T) {
 	gc.Schedule(nodeID, 1*time.Millisecond)
 
 	// Set up a timeout channel for our test
-	timeout := time.After(fiveHundred)
+	timeout := time.After(fiveHundredMillis)
 
 	// Check if any node was deleted (which shouldn't happen)
 	select {
@@ -331,7 +329,7 @@ func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 	// Number of concurrent scheduling goroutines
 	const numSchedulers = 10
 	const nodesPerScheduler = 50
-	const schedulingDuration = fiveHundred
+	const schedulingDuration = fiveHundredMillis
 
 	// Use WaitGroup to wait for all scheduling goroutines to finish
 	var wg sync.WaitGroup
@@ -341,14 +339,14 @@ func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 	stopScheduling := make(chan struct{})
 
 	// Launch goroutines that continuously schedule nodes
-	for schedulerIndex := range numSchedulers {
+	for i := 0; i < numSchedulers; i++ {
 		go func(schedulerID int) {
 			defer wg.Done()
 
 			baseNodeID := schedulerID * nodesPerScheduler
 
 			// Keep scheduling nodes until signaled to stop
-			for j := range nodesPerScheduler {
+			for j := 0; j < nodesPerScheduler; j++ {
 				select {
 				case <-stopScheduling:
 					return
@@ -360,7 +358,7 @@ func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 					time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
 				}
 			}
-		}(schedulerIndex)
+		}(i)
 	}
 
 	// After a short delay, close the garbage collector while schedulers are still running
@@ -379,7 +377,7 @@ func TestEphemeralGarbageCollectorConcurrentScheduleAndClose(t *testing.T) {
 	wg.Wait()
 
 	// Wait a bit longer to allow any leaked goroutines to do their work
-	time.Sleep(oneHundred)
+	time.Sleep(oneHundredMillis)
 
 	// Check for leaks
 	finalGoroutines := runtime.NumGoroutine()

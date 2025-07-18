@@ -1,5 +1,3 @@
-//go:generate go run tailscale.com/cmd/viewer --type=User,Node,PreAuthKey
-
 package types
 
 import (
@@ -180,7 +178,6 @@ func MustRegistrationID() RegistrationID {
 	if err != nil {
 		panic(err)
 	}
-
 	return rid
 }
 

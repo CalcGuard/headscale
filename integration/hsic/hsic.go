@@ -1,8 +1,6 @@
 package hsic
 
 import (
-	"archive/tar"
-	"bytes"
 	"cmp"
 	"crypto/tls"
 	"encoding/json"
@@ -14,7 +12,6 @@ import (
 	"net/netip"
 	"os"
 	"path"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +19,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
-	policyv2 "github.com/juanfont/headscale/hscontrol/policy/v2"
+	policyv1 "github.com/juanfont/headscale/hscontrol/policy/v1"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/juanfont/headscale/integration/dockertestutil"
@@ -68,7 +65,7 @@ type HeadscaleInContainer struct {
 	extraPorts       []string
 	caCerts          [][]byte
 	hostPortBindings map[string][]string
-	aclPolicy        *policyv2.Policy
+	aclPolicy        *policyv1.ACLPolicy
 	env              map[string]string
 	tlsCert          []byte
 	tlsKey           []byte
@@ -83,7 +80,7 @@ type Option = func(c *HeadscaleInContainer)
 
 // WithACLPolicy adds a hscontrol.ACLPolicy policy to the
 // HeadscaleInContainer instance.
-func WithACLPolicy(acl *policyv2.Policy) Option {
+func WithACLPolicy(acl *policyv1.ACLPolicy) Option {
 	return func(hsic *HeadscaleInContainer) {
 		if acl == nil {
 			return
@@ -191,7 +188,14 @@ func WithPostgres() Option {
 	}
 }
 
-// WithPolicy sets the policy mode for headscale.
+// WithPolicyV1 tells the integration test to use the old v1 filter.
+func WithPolicyV1() Option {
+	return func(hsic *HeadscaleInContainer) {
+		hsic.env["HEADSCALE_POLICY_V1"] = "1"
+	}
+}
+
+// WithPolicy sets the policy mode for headscale
 func WithPolicyMode(mode types.PolicyMode) Option {
 	return func(hsic *HeadscaleInContainer) {
 		hsic.policyMode = mode
@@ -279,7 +283,7 @@ func New(
 		return nil, err
 	}
 
-	hostname := "hs-" + hash
+	hostname := fmt.Sprintf("hs-%s", hash)
 
 	hsic := &HeadscaleInContainer{
 		hostname: hostname,
@@ -308,28 +312,24 @@ func New(
 
 	if hsic.postgres {
 		hsic.env["HEADSCALE_DATABASE_TYPE"] = "postgres"
-		hsic.env["HEADSCALE_DATABASE_POSTGRES_HOST"] = "postgres-" + hash
+		hsic.env["HEADSCALE_DATABASE_POSTGRES_HOST"] = fmt.Sprintf("postgres-%s", hash)
 		hsic.env["HEADSCALE_DATABASE_POSTGRES_USER"] = "headscale"
 		hsic.env["HEADSCALE_DATABASE_POSTGRES_PASS"] = "headscale"
 		hsic.env["HEADSCALE_DATABASE_POSTGRES_NAME"] = "headscale"
 		delete(hsic.env, "HEADSCALE_DATABASE_SQLITE_PATH")
 
-		pgRunOptions := &dockertest.RunOptions{
-			Name:       "postgres-" + hash,
-			Repository: "postgres",
-			Tag:        "latest",
-			Networks:   networks,
-			Env: []string{
-				"POSTGRES_USER=headscale",
-				"POSTGRES_PASSWORD=headscale",
-				"POSTGRES_DB=headscale",
-			},
-		}
-
-		// Add integration test labels if running under hi tool
-		dockertestutil.DockerAddIntegrationLabels(pgRunOptions, "postgres")
-
-		pg, err := pool.RunWithOptions(pgRunOptions)
+		pg, err := pool.RunWithOptions(
+			&dockertest.RunOptions{
+				Name:       fmt.Sprintf("postgres-%s", hash),
+				Repository: "postgres",
+				Tag:        "latest",
+				Networks:   networks,
+				Env: []string{
+					"POSTGRES_USER=headscale",
+					"POSTGRES_PASSWORD=headscale",
+					"POSTGRES_DB=headscale",
+				},
+			})
 		if err != nil {
 			return nil, fmt.Errorf("starting postgres container: %w", err)
 		}
@@ -392,9 +392,6 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-
-	// Add integration test labels if running under hi tool
-	dockertestutil.DockerAddIntegrationLabels(runOptions, "headscale")
 
 	container, err := pool.BuildAndRunWithBuildOptions(
 		headscaleBuildOptions,
@@ -563,68 +560,22 @@ func (t *HeadscaleInContainer) SaveMetrics(savePath string) error {
 	return nil
 }
 
-// extractTarToDirectory extracts a tar archive to a directory.
-func extractTarToDirectory(tarData []byte, targetDir string) error {
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", targetDir, err)
-	}
-
-	tarReader := tar.NewReader(bytes.NewReader(tarData))
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to read tar header: %w", err)
-		}
-
-		// Clean the path to prevent directory traversal
-		cleanName := filepath.Clean(header.Name)
-		if strings.Contains(cleanName, "..") {
-			continue // Skip potentially dangerous paths
-		}
-
-		targetPath := filepath.Join(targetDir, filepath.Base(cleanName))
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			// Create directory
-			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("failed to create directory %s: %w", targetPath, err)
-			}
-		case tar.TypeReg:
-			// Create file
-			outFile, err := os.Create(targetPath)
-			if err != nil {
-				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
-			}
-
-			if _, err := io.Copy(outFile, tarReader); err != nil {
-				outFile.Close()
-				return fmt.Errorf("failed to copy file contents: %w", err)
-			}
-			outFile.Close()
-
-			// Set file permissions
-			if err := os.Chmod(targetPath, os.FileMode(header.Mode)); err != nil {
-				return fmt.Errorf("failed to set file permissions: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
 func (t *HeadscaleInContainer) SaveProfile(savePath string) error {
 	tarFile, err := t.FetchPath("/tmp/profile")
 	if err != nil {
 		return err
 	}
 
-	targetDir := path.Join(savePath, t.hostname+"-pprof")
+	err = os.WriteFile(
+		path.Join(savePath, t.hostname+".pprof.tar"),
+		tarFile,
+		os.ModePerm,
+	)
+	if err != nil {
+		return err
+	}
 
-	return extractTarToDirectory(tarFile, targetDir)
+	return nil
 }
 
 func (t *HeadscaleInContainer) SaveMapResponses(savePath string) error {
@@ -633,101 +584,34 @@ func (t *HeadscaleInContainer) SaveMapResponses(savePath string) error {
 		return err
 	}
 
-	targetDir := path.Join(savePath, t.hostname+"-mapresponses")
+	err = os.WriteFile(
+		path.Join(savePath, t.hostname+".maps.tar"),
+		tarFile,
+		os.ModePerm,
+	)
+	if err != nil {
+		return err
+	}
 
-	return extractTarToDirectory(tarFile, targetDir)
+	return nil
 }
 
 func (t *HeadscaleInContainer) SaveDatabase(savePath string) error {
-	// If using PostgreSQL, skip database file extraction
-	if t.postgres {
-		return nil
-	}
-
-	// First, let's see what files are actually in /tmp
-	tmpListing, err := t.Execute([]string{"ls", "-la", "/tmp/"})
-	if err != nil {
-		log.Printf("Warning: could not list /tmp directory: %v", err)
-	} else {
-		log.Printf("Contents of /tmp in container %s:\n%s", t.hostname, tmpListing)
-	}
-
-	// Also check for any .sqlite files
-	sqliteFiles, err := t.Execute([]string{"find", "/tmp", "-name", "*.sqlite*", "-type", "f"})
-	if err != nil {
-		log.Printf("Warning: could not find sqlite files: %v", err)
-	} else {
-		log.Printf("SQLite files found in %s:\n%s", t.hostname, sqliteFiles)
-	}
-
-	// Check if the database file exists and has a schema
-	dbPath := "/tmp/integration_test_db.sqlite3"
-	fileInfo, err := t.Execute([]string{"ls", "-la", dbPath})
-	if err != nil {
-		return fmt.Errorf("database file does not exist at %s: %w", dbPath, err)
-	}
-	log.Printf("Database file info: %s", fileInfo)
-
-	// Check if the database has any tables (schema)
-	schemaCheck, err := t.Execute([]string{"sqlite3", dbPath, ".schema"})
-	if err != nil {
-		return fmt.Errorf("failed to check database schema (sqlite3 command failed): %w", err)
-	}
-
-	if strings.TrimSpace(schemaCheck) == "" {
-		return errors.New("database file exists but has no schema (empty database)")
-	}
-
-	// Show a preview of the schema (first 500 chars)
-	schemaPreview := schemaCheck
-	if len(schemaPreview) > 500 {
-		schemaPreview = schemaPreview[:500] + "..."
-	}
-
 	tarFile, err := t.FetchPath("/tmp/integration_test_db.sqlite3")
 	if err != nil {
-		return fmt.Errorf("failed to fetch database file: %w", err)
+		return err
 	}
 
-	// For database, extract the first regular file (should be the SQLite file)
-	tarReader := tar.NewReader(bytes.NewReader(tarFile))
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to read tar header: %w", err)
-		}
-
-		log.Printf("Found file in tar: %s (type: %d, size: %d)", header.Name, header.Typeflag, header.Size)
-
-		// Extract the first regular file we find
-		if header.Typeflag == tar.TypeReg {
-			dbPath := path.Join(savePath, t.hostname+".db")
-			outFile, err := os.Create(dbPath)
-			if err != nil {
-				return fmt.Errorf("failed to create database file: %w", err)
-			}
-
-			written, err := io.Copy(outFile, tarReader)
-			outFile.Close()
-			if err != nil {
-				return fmt.Errorf("failed to copy database file: %w", err)
-			}
-
-			log.Printf("Extracted database file: %s (%d bytes written, header claimed %d bytes)", dbPath, written, header.Size)
-
-			// Check if we actually wrote something
-			if written == 0 {
-				return fmt.Errorf("database file is empty (size: %d, header size: %d)", written, header.Size)
-			}
-
-			return nil
-		}
+	err = os.WriteFile(
+		path.Join(savePath, t.hostname+".db.tar"),
+		tarFile,
+		os.ModePerm,
+	)
+	if err != nil {
+		return err
 	}
 
-	return errors.New("no regular file found in database tar archive")
+	return nil
 }
 
 // Execute runs a command inside the Headscale container and returns the
@@ -756,13 +640,13 @@ func (t *HeadscaleInContainer) Execute(
 
 // GetPort returns the docker container port as a string.
 func (t *HeadscaleInContainer) GetPort() string {
-	return strconv.Itoa(t.port)
+	return fmt.Sprintf("%d", t.port)
 }
 
 // GetHealthEndpoint returns a health endpoint for the HeadscaleInContainer
 // instance.
 func (t *HeadscaleInContainer) GetHealthEndpoint() string {
-	return t.GetEndpoint() + "/health"
+	return fmt.Sprintf("%s/health", t.GetEndpoint())
 }
 
 // GetEndpoint returns the Headscale endpoint for the HeadscaleInContainer.
@@ -772,10 +656,10 @@ func (t *HeadscaleInContainer) GetEndpoint() string {
 		t.port)
 
 	if t.hasTLS() {
-		return "https://" + hostEndpoint
+		return fmt.Sprintf("https://%s", hostEndpoint)
 	}
 
-	return "http://" + hostEndpoint
+	return fmt.Sprintf("http://%s", hostEndpoint)
 }
 
 // GetCert returns the public certificate of the HeadscaleInContainer.
@@ -910,7 +794,6 @@ func (t *HeadscaleInContainer) ListNodes(
 		}
 
 		ret = append(ret, nodes...)
-
 		return nil
 	}
 
@@ -933,7 +816,6 @@ func (t *HeadscaleInContainer) ListNodes(
 	sort.Slice(ret, func(i, j int) bool {
 		return cmp.Compare(ret[i].GetId(), ret[j].GetId()) == -1
 	})
-
 	return ret, nil
 }
 
@@ -945,10 +827,10 @@ func (t *HeadscaleInContainer) NodesByUser() (map[string][]*v1.Node, error) {
 
 	var userMap map[string][]*v1.Node
 	for _, node := range nodes {
-		if _, ok := userMap[node.GetUser().GetName()]; !ok {
-			mak.Set(&userMap, node.GetUser().GetName(), []*v1.Node{node})
+		if _, ok := userMap[node.User.Name]; !ok {
+			mak.Set(&userMap, node.User.Name, []*v1.Node{node})
 		} else {
-			userMap[node.GetUser().GetName()] = append(userMap[node.GetUser().GetName()], node)
+			userMap[node.User.Name] = append(userMap[node.User.Name], node)
 		}
 	}
 
@@ -1001,13 +883,13 @@ func (t *HeadscaleInContainer) MapUsers() (map[string]*v1.User, error) {
 
 	var userMap map[string]*v1.User
 	for _, user := range users {
-		mak.Set(&userMap, user.GetName(), user)
+		mak.Set(&userMap, user.Name, user)
 	}
 
 	return userMap, nil
 }
 
-func (h *HeadscaleInContainer) SetPolicy(pol *policyv2.Policy) error {
+func (h *HeadscaleInContainer) SetPolicy(pol *policyv1.ACLPolicy) error {
 	err := h.writePolicy(pol)
 	if err != nil {
 		return fmt.Errorf("writing policy file: %w", err)
@@ -1048,7 +930,7 @@ func (h *HeadscaleInContainer) reloadDatabasePolicy() error {
 	return nil
 }
 
-func (h *HeadscaleInContainer) writePolicy(pol *policyv2.Policy) error {
+func (h *HeadscaleInContainer) writePolicy(pol *policyv1.ACLPolicy) error {
 	pBytes, err := json.Marshal(pol)
 	if err != nil {
 		return fmt.Errorf("marshalling pol: %w", err)
@@ -1097,7 +979,7 @@ func (h *HeadscaleInContainer) PID() (int, error) {
 	case 1:
 		return pids[0], nil
 	default:
-		return 0, errors.New("multiple headscale processes running")
+		return 0, fmt.Errorf("multiple headscale processes running")
 	}
 }
 
@@ -1123,7 +1005,7 @@ func (t *HeadscaleInContainer) ApproveRoutes(id uint64, routes []netip.Prefix) (
 		"headscale", "nodes", "approve-routes",
 		"--output", "json",
 		"--identifier", strconv.FormatUint(id, 10),
-		"--routes=" + strings.Join(util.PrefixesToString(routes), ","),
+		fmt.Sprintf("--routes=%s", strings.Join(util.PrefixesToString(routes), ",")),
 	}
 
 	result, _, err := dockertestutil.ExecuteCommand(

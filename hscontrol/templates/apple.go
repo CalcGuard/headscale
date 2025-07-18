@@ -62,7 +62,7 @@ func Apple(url string) *elem.Element {
 			),
 			elem.Pre(nil,
 				elem.Code(nil,
-					elem.Text("tailscale login --login-server "+url),
+					elem.Text(fmt.Sprintf("tailscale login --login-server %s", url)),
 				),
 			),
 			headerTwo("GUI"),
@@ -143,7 +143,10 @@ func Apple(url string) *elem.Element {
 					elem.Code(
 						nil,
 						elem.Text(
-							"defaults write io.tailscale.ipn.macos ControlURL "+url,
+							fmt.Sprintf(
+								`defaults write io.tailscale.ipn.macos ControlURL %s`,
+								url,
+							),
 						),
 					),
 				),
@@ -152,7 +155,10 @@ func Apple(url string) *elem.Element {
 					elem.Code(
 						nil,
 						elem.Text(
-							"defaults write io.tailscale.ipn.macsys ControlURL "+url,
+							fmt.Sprintf(
+								`defaults write io.tailscale.ipn.macsys ControlURL %s`,
+								url,
+							),
 						),
 					),
 				),

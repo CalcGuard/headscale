@@ -11,7 +11,6 @@ import (
 	"github.com/juanfont/headscale/integration/tsic"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/netcheck"
-	"tailscale.com/types/key"
 	"tailscale.com/types/netmap"
 )
 
@@ -38,7 +37,6 @@ type TailscaleClient interface {
 	MustStatus() *ipnstate.Status
 	Netmap() (*netmap.NetworkMap, error)
 	DebugDERPRegion(region string) (*ipnstate.DebugDERPRegionReport, error)
-	GetNodePrivateKey() (*key.NodePrivate, error)
 	Netcheck() (*netcheck.Report, error)
 	WaitForNeedsLogin() error
 	WaitForRunning() error

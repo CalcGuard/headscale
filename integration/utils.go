@@ -5,29 +5,20 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net/netip"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v5"
-	policyv2 "github.com/juanfont/headscale/hscontrol/policy/v2"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/juanfont/headscale/integration/tsic"
 	"github.com/stretchr/testify/assert"
-	"tailscale.com/tailcfg"
-	"tailscale.com/types/ptr"
 )
 
 const (
-	// derpPingTimeout defines the timeout for individual DERP ping operations
-	// Used in DERP connectivity tests to verify relay server communication
 	derpPingTimeout = 2 * time.Second
-	
-	// derpPingCount defines the number of ping attempts for DERP connectivity tests
-	// Higher count provides better reliability assessment of DERP connectivity
-	derpPingCount = 10
+	derpPingCount   = 10
 )
 
 func assertNoErr(t *testing.T, err error) {
@@ -110,9 +101,6 @@ func didClientUseWebsocketForDERP(t *testing.T, client TailscaleClient) bool {
 	return count > 0
 }
 
-// pingAllHelper performs ping tests between all clients and addresses, returning success count.
-// This is used to validate network connectivity in integration tests.
-// Returns the total number of successful ping operations.
 func pingAllHelper(t *testing.T, clients []TailscaleClient, addrs []string, opts ...tsic.PingOption) int {
 	t.Helper()
 	success := 0
@@ -131,9 +119,6 @@ func pingAllHelper(t *testing.T, clients []TailscaleClient, addrs []string, opts
 	return success
 }
 
-// pingDerpAllHelper performs DERP-based ping tests between all clients and addresses.
-// This specifically tests connectivity through DERP relay servers, which is important
-// for validating NAT traversal and relay functionality. Returns success count.
 func pingDerpAllHelper(t *testing.T, clients []TailscaleClient, addrs []string) int {
 	t.Helper()
 	success := 0
@@ -277,7 +262,7 @@ func assertValidStatus(t *testing.T, client TailscaleClient) {
 
 	// This isn't really relevant for Self as it won't be in its own socket/wireguard.
 	// assert.Truef(t, status.Self.InMagicSock, "%q is not tracked by magicsock", client.Hostname())
-	// assert.Truef(t, status.Self.InEngine, "%q is not in wireguard engine", client.Hostname())
+	// assert.Truef(t, status.Self.InEngine, "%q is not in in wireguard engine", client.Hostname())
 
 	for _, peer := range status.Peer {
 		assert.NotEmptyf(t, peer.HostName, "peer (%s) of %q does not have HostName set, likely missing Hostinfo", peer.DNSName, client.Hostname())
@@ -315,28 +300,26 @@ func assertValidNetcheck(t *testing.T, client TailscaleClient) {
 	assert.NotEqualf(t, 0, report.PreferredDERP, "%q does not have a DERP relay", client.Hostname())
 }
 
-// assertCommandOutputContains executes a command with exponential backoff retry until the output
-// contains the expected string or timeout is reached (10 seconds).
-// This implements eventual consistency patterns and should be used instead of time.Sleep 
-// before executing commands that depend on network state propagation.
-//
-// Timeout: 10 seconds with exponential backoff
-// Use cases: DNS resolution, route propagation, policy updates
+// assertCommandOutputContains executes a command for a set time and asserts that the output
+// reaches a desired state.
+// It should be used instead of sleeping before executing.
 func assertCommandOutputContains(t *testing.T, c TailscaleClient, command []string, contains string) {
 	t.Helper()
 
-	_, err := backoff.Retry(t.Context(), func() (struct{}, error) {
+	err := backoff.Retry(func() error {
 		stdout, stderr, err := c.Execute(command)
 		if err != nil {
-			return struct{}{}, fmt.Errorf("executing command, stdout: %q stderr: %q, err: %w", stdout, stderr, err)
+			return fmt.Errorf("executing command, stdout: %q stderr: %q, err: %w", stdout, stderr, err)
 		}
 
 		if !strings.Contains(stdout, contains) {
-			return struct{}{}, fmt.Errorf("executing command, expected string %q not found in %q", contains, stdout)
+			return fmt.Errorf("executing command, expected string %q not found in %q", contains, stdout)
 		}
 
-		return struct{}{}, nil
-	}, backoff.WithBackOff(backoff.NewExponentialBackOff()), backoff.WithMaxElapsedTime(10*time.Second))
+		return nil
+	}, backoff.NewExponentialBackOff(
+		backoff.WithMaxElapsedTime(10*time.Second)),
+	)
 
 	assert.NoError(t, err)
 }
@@ -436,77 +419,10 @@ func countMatchingLines(in io.Reader, predicate func(string) bool) (int, error) 
 // 				return peer
 // 			}
 // 		}
-// }
+// 	}
 //
 // 	return nil
 // }
-
-// Helper functions for creating typed policy entities
-
-// wildcard returns a wildcard alias (*).
-func wildcard() policyv2.Alias {
-	return policyv2.Wildcard
-}
-
-// usernamep returns a pointer to a Username as an Alias.
-func usernamep(name string) policyv2.Alias {
-	return ptr.To(policyv2.Username(name))
-}
-
-// hostp returns a pointer to a Host.
-func hostp(name string) policyv2.Alias {
-	return ptr.To(policyv2.Host(name))
-}
-
-// groupp returns a pointer to a Group as an Alias.
-func groupp(name string) policyv2.Alias {
-	return ptr.To(policyv2.Group(name))
-}
-
-// tagp returns a pointer to a Tag as an Alias.
-func tagp(name string) policyv2.Alias {
-	return ptr.To(policyv2.Tag(name))
-}
-
-// prefixp returns a pointer to a Prefix from a CIDR string.
-func prefixp(cidr string) policyv2.Alias {
-	prefix := netip.MustParsePrefix(cidr)
-	return ptr.To(policyv2.Prefix(prefix))
-}
-
-// aliasWithPorts creates an AliasWithPorts structure from an alias and ports.
-func aliasWithPorts(alias policyv2.Alias, ports ...tailcfg.PortRange) policyv2.AliasWithPorts {
-	return policyv2.AliasWithPorts{
-		Alias: alias,
-		Ports: ports,
-	}
-}
-
-// usernameOwner returns a Username as an Owner for use in TagOwners.
-func usernameOwner(name string) policyv2.Owner {
-	return ptr.To(policyv2.Username(name))
-}
-
-// groupOwner returns a Group as an Owner for use in TagOwners.
-func groupOwner(name string) policyv2.Owner {
-	return ptr.To(policyv2.Group(name))
-}
-
-// usernameApprover returns a Username as an AutoApprover.
-func usernameApprover(name string) policyv2.AutoApprover {
-	return ptr.To(policyv2.Username(name))
-}
-
-// groupApprover returns a Group as an AutoApprover.
-func groupApprover(name string) policyv2.AutoApprover {
-	return ptr.To(policyv2.Group(name))
-}
-
-// tagApprover returns a Tag as an AutoApprover.
-func tagApprover(name string) policyv2.AutoApprover {
-	return ptr.To(policyv2.Tag(name))
-}
-
 //
 // // findPeerByHostname takes a hostname and a map of peers from status.Peer, and returns a *ipnstate.PeerStatus
 // // if there is a peer with the given hostname. If no peer is found, nil is returned.

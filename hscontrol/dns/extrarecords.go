@@ -1,14 +1,13 @@
 package dns
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
 
-	"github.com/cenkalti/backoff/v5"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 	"tailscale.com/tailcfg"
@@ -96,13 +95,14 @@ func (e *ExtraRecordsMan) Run() {
 				// If a file is removed or renamed, fsnotify will loose track of it
 				// and not watch it. We will therefore attempt to re-add it with a backoff.
 			case fsnotify.Remove, fsnotify.Rename:
-				_, err := backoff.Retry(context.Background(), func() (struct{}, error) {
+				err := backoff.Retry(func() error {
 					if _, err := os.Stat(e.path); err != nil {
-						return struct{}{}, err
+						return err
 					}
 
-					return struct{}{}, nil
-				}, backoff.WithBackOff(backoff.NewExponentialBackOff()))
+					return nil
+				}, backoff.NewExponentialBackOff())
+
 				if err != nil {
 					log.Error().Caller().Err(err).Msgf("extra records filewatcher retrying to find file after delete")
 					continue

@@ -2,11 +2,9 @@ package server
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -30,10 +28,7 @@ import (
 // server that the DERP HTTP client does not want the HTTP 101 response
 // headers and it will begin writing & reading the DERP protocol immediately
 // following its HTTP request.
-const (
-	fastStartHeader  = "Derp-Fast-Start"
-	DerpVerifyScheme = "headscale-derp-verify"
-)
+const fastStartHeader = "Derp-Fast-Start"
 
 type DERPServer struct {
 	serverURL     string
@@ -49,11 +44,6 @@ func NewDERPServer(
 ) (*DERPServer, error) {
 	log.Trace().Caller().Msg("Creating new embedded DERP server")
 	server := derp.NewServer(derpKey, util.TSLogfWrapper()) // nolint // zerolinter complains
-
-	if cfg.ServerVerifyClients {
-		server.SetVerifyClientURL(DerpVerifyScheme + "://verify")
-		server.SetVerifyClientURLFailOpen(false)
-	}
 
 	return &DERPServer{
 		serverURL:     serverURL,
@@ -93,7 +83,7 @@ func (d *DERPServer) GenerateRegion() (tailcfg.DERPRegion, error) {
 		Avoid:      false,
 		Nodes: []*tailcfg.DERPNode{
 			{
-				Name:     strconv.Itoa(d.cfg.ServerRegionID),
+				Name:     fmt.Sprintf("%d", d.cfg.ServerRegionID),
 				RegionID: d.cfg.ServerRegionID,
 				HostName: host,
 				DERPPort: port,
@@ -369,30 +359,4 @@ func serverSTUNListener(ctx context.Context, packetConn *net.UDPConn) {
 			continue
 		}
 	}
-}
-
-func NewDERPVerifyTransport(handleVerifyRequest func(*http.Request, io.Writer) error) *DERPVerifyTransport {
-	return &DERPVerifyTransport{
-		handleVerifyRequest: handleVerifyRequest,
-	}
-}
-
-type DERPVerifyTransport struct {
-	handleVerifyRequest func(*http.Request, io.Writer) error
-}
-
-func (t *DERPVerifyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	buf := new(bytes.Buffer)
-	if err := t.handleVerifyRequest(req, buf); err != nil {
-		log.Error().Caller().Err(err).Msg("Failed to handle client verify request: ")
-
-		return nil, err
-	}
-
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(buf),
-	}
-
-	return resp, nil
 }

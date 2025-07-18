@@ -32,7 +32,7 @@ import (
 	"github.com/oauth2-proxy/mockoidc"
 	"github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
-	"github.com/puzpuzpuz/xsync/v4"
+	"github.com/puzpuzpuz/xsync/v3"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,6 +47,7 @@ const (
 )
 
 var usePostgresForTest = envknob.Bool("HEADSCALE_INTEGRATION_POSTGRES")
+var usePolicyV1ForTest = envknob.Bool("HEADSCALE_POLICY_V1")
 
 var (
 	errNoHeadscaleAvailable = errors.New("no headscale available")
@@ -123,7 +124,7 @@ type ScenarioSpec struct {
 	// NodesPerUser is how many nodes should be attached to each user.
 	NodesPerUser int
 
-	// Networks, if set, is the separate Docker networks that should be
+	// Networks, if set, is the seperate Docker networks that should be
 	// created and a list of the users that should be placed in those networks.
 	// If not set, a single network will be created and all users+nodes will be
 	// added there.
@@ -411,6 +412,10 @@ func (s *Scenario) Headscale(opts ...hsic.Option) (ControlServer, error) {
 
 	if usePostgresForTest {
 		opts = append(opts, hsic.WithPostgres())
+	}
+
+	if usePolicyV1ForTest {
+		opts = append(opts, hsic.WithPolicyV1())
 	}
 
 	headscale, err := hsic.New(s.pool, s.Networks(), opts...)
@@ -842,7 +847,6 @@ func (s *Scenario) runHeadscaleRegister(userStr string, body string) error {
 		return errParseAuthPage
 	}
 	key := keySep[1]
-	key = strings.SplitN(key, " ", 2)[0]
 	log.Printf("registering node %s", key)
 
 	if headscale, err := s.Headscale(); err == nil {
@@ -1077,7 +1081,7 @@ func (s *Scenario) runMockOIDC(accessTTL time.Duration, users []mockoidc.MockUse
 
 	hash, _ := util.GenerateRandomStringDNSSafe(hsicOIDCMockHashLength)
 
-	hostname := "hs-oidcmock-" + hash
+	hostname := fmt.Sprintf("hs-oidcmock-%s", hash)
 
 	usersJSON, err := json.Marshal(users)
 	if err != nil {
@@ -1093,12 +1097,12 @@ func (s *Scenario) runMockOIDC(accessTTL time.Duration, users []mockoidc.MockUse
 		},
 		Networks: s.Networks(),
 		Env: []string{
-			"MOCKOIDC_ADDR=" + hostname,
+			fmt.Sprintf("MOCKOIDC_ADDR=%s", hostname),
 			fmt.Sprintf("MOCKOIDC_PORT=%d", port),
 			"MOCKOIDC_CLIENT_ID=superclient",
 			"MOCKOIDC_CLIENT_SECRET=supersecret",
-			"MOCKOIDC_ACCESS_TTL=" + accessTTL.String(),
-			"MOCKOIDC_USERS=" + string(usersJSON),
+			fmt.Sprintf("MOCKOIDC_ACCESS_TTL=%s", accessTTL.String()),
+			fmt.Sprintf("MOCKOIDC_USERS=%s", string(usersJSON)),
 		},
 	}
 
@@ -1113,9 +1117,6 @@ func (s *Scenario) runMockOIDC(accessTTL time.Duration, users []mockoidc.MockUse
 	}
 
 	s.mockOIDC = scenarioOIDC{}
-
-	// Add integration test labels if running under hi tool
-	dockertestutil.DockerAddIntegrationLabels(mockOidcOptions, "oidc")
 
 	if pmockoidc, err := s.pool.BuildAndRunWithBuildOptions(
 		headscaleBuildOptions,
@@ -1183,7 +1184,7 @@ func Webservice(s *Scenario, networkName string) (*dockertest.Resource, error) {
 
 	hash := util.MustGenerateRandomStringDNSSafe(hsicOIDCMockHashLength)
 
-	hostname := "hs-webservice-" + hash
+	hostname := fmt.Sprintf("hs-webservice-%s", hash)
 
 	network, ok := s.networks[s.prefixedNetworkName(networkName)]
 	if !ok {
@@ -1200,9 +1201,6 @@ func Webservice(s *Scenario, networkName string) (*dockertest.Resource, error) {
 		Networks: []*dockertest.Network{network},
 		Env:      []string{},
 	}
-
-	// Add integration test labels if running under hi tool
-	dockertestutil.DockerAddIntegrationLabels(webOpts, "web")
 
 	webBOpts := &dockertest.BuildOptions{
 		Dockerfile: hsic.IntegrationTestDockerFileName,

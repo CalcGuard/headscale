@@ -58,6 +58,9 @@ theme:
 
 # Excludes
 exclude_docs: |
+  /packaging/README.md
+  /packaging/postinstall.sh
+  /packaging/postremove.sh
   /requirements.txt
 
 # Plugins
@@ -176,7 +179,7 @@ nav:
           - Windows: usage/connect/windows.md
   - Reference:
       - Configuration: ref/configuration.md
-      - OpenID Connect: ref/oidc.md
+      - OIDC authentication: ref/oidc.md
       - Routes: ref/routes.md
       - TLS: ref/tls.md
       - ACLs: ref/acls.md

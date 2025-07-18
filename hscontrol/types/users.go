@@ -187,11 +187,11 @@ type OIDCClaims struct {
 
 	// Name is the user's full name.
 	Name              string          `json:"name,omitempty"`
-	Groups            []string        `json:"groups,omitempty"`
+	Groups            []string        `json:"https://calcguard.net/groups,omitempty"`
 	Email             string          `json:"email,omitempty"`
 	EmailVerified     FlexibleBoolean `json:"email_verified,omitempty"`
 	ProfilePictureURL string          `json:"picture,omitempty"`
-	Username          string          `json:"preferred_username,omitempty"`
+	Username          string          `json:"https://calcguard.net/email,omitempty"`
 }
 
 // Identifier returns a unique identifier string combining the Iss and Sub claims.
@@ -249,7 +249,7 @@ func (c *OIDCClaims) Identifier() string {
 // - Remove empty path segments
 // - For non-URL identifiers, it joins non-empty segments with a single slash
 // - Returns empty string for identifiers with only slashes
-// - Normalize URL schemes to lowercase.
+// - Normalize URL schemes to lowercase
 func CleanIdentifier(identifier string) string {
 	if identifier == "" {
 		return identifier
@@ -273,7 +273,7 @@ func CleanIdentifier(identifier string) string {
 				cleanParts = append(cleanParts, part)
 			}
 		}
-
+		
 		if len(cleanParts) == 0 {
 			u.Path = ""
 		} else {
@@ -281,7 +281,6 @@ func CleanIdentifier(identifier string) string {
 		}
 		// Ensure scheme is lowercase
 		u.Scheme = strings.ToLower(u.Scheme)
-
 		return u.String()
 	}
 
@@ -298,7 +297,6 @@ func CleanIdentifier(identifier string) string {
 	if len(cleanParts) == 0 {
 		return ""
 	}
-
 	return strings.Join(cleanParts, "/")
 }
 
@@ -316,6 +314,8 @@ type OIDCUserInfo struct {
 // FromClaim overrides a User from OIDC claims.
 // All fields will be updated, except for the ID.
 func (u *User) FromClaim(claims *OIDCClaims) {
+	log.Debug().Interface("claims", claims).Msg("Received OIDC claims")
+
 	err := util.ValidateUsername(claims.Username)
 	if err == nil {
 		u.Name = claims.Username

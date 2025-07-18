@@ -8,8 +8,9 @@ import (
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/check.v1"
 	"tailscale.com/types/ptr"
+
+	"gopkg.in/check.v1"
 )
 
 func (*Suite) TestCreatePreAuthKey(c *check.C) {

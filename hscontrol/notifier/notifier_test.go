@@ -1,14 +1,16 @@
 package notifier
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"net/netip"
-	"slices"
 	"sort"
 	"sync"
 	"testing"
 	"time"
+
+	"slices"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/juanfont/headscale/hscontrol/types"
@@ -239,7 +241,7 @@ func TestBatcher(t *testing.T) {
 			defer n.RemoveNode(1, ch)
 
 			for _, u := range tt.updates {
-				n.NotifyAll(t.Context(), u)
+				n.NotifyAll(context.Background(), u)
 			}
 
 			n.b.flush()
@@ -268,7 +270,7 @@ func TestBatcher(t *testing.T) {
 // TestIsLikelyConnectedRaceCondition tests for a race condition in IsLikelyConnected
 // Multiple goroutines calling AddNode and RemoveNode cause panics when trying to
 // close a channel that was already closed, which can happen when a node changes
-// network transport quickly (eg mobile->wifi) and reconnects whilst also disconnecting.
+// network transport quickly (eg mobile->wifi) and reconnects whilst also disconnecting
 func TestIsLikelyConnectedRaceCondition(t *testing.T) {
 	// mock config for the notifier
 	cfg := &types.Config{
@@ -306,17 +308,16 @@ func TestIsLikelyConnectedRaceCondition(t *testing.T) {
 			for range iterations {
 				// Simulate race by having some goroutines check IsLikelyConnected
 				// while others add/remove the node
-				switch routineID % 3 {
-				case 0:
+				if routineID%3 == 0 {
 					// This goroutine checks connection status
 					isConnected := notifier.IsLikelyConnected(nodeID)
 					if isConnected != true && isConnected != false {
 						errChan <- fmt.Sprintf("Invalid connection status: %v", isConnected)
 					}
-				case 1:
+				} else if routineID%3 == 1 {
 					// This goroutine removes the node
 					notifier.RemoveNode(nodeID, updateChan)
-				default:
+				} else {
 					// This goroutine adds the node back
 					notifier.AddNode(nodeID, updateChan)
 				}

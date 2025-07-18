@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -69,7 +68,7 @@ func mockOIDC() error {
 
 	userStr := os.Getenv("MOCKOIDC_USERS")
 	if userStr == "" {
-		return errors.New("MOCKOIDC_USERS not defined")
+		return fmt.Errorf("MOCKOIDC_USERS not defined")
 	}
 
 	var users []mockoidc.MockUser

@@ -3,10 +3,11 @@ package integration
 import (
 	"fmt"
 	"net/netip"
-	"slices"
 	"strconv"
 	"testing"
 	"time"
+
+	"slices"
 
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"github.com/juanfont/headscale/integration/hsic"
@@ -18,6 +19,7 @@ import (
 
 func TestAuthKeyLogoutAndReloginSameUser(t *testing.T) {
 	IntegrationSkip(t)
+	t.Parallel()
 
 	for _, https := range []bool{true, false} {
 		t.Run(fmt.Sprintf("with-https-%t", https), func(t *testing.T) {
@@ -64,7 +66,7 @@ func TestAuthKeyLogoutAndReloginSameUser(t *testing.T) {
 			assertNoErrGetHeadscale(t, err)
 
 			listNodes, err := headscale.ListNodes()
-			assert.Len(t, allClients, len(listNodes))
+			assert.Equal(t, len(listNodes), len(allClients))
 			nodeCountBeforeLogout := len(listNodes)
 			t.Logf("node count before logout: %d", nodeCountBeforeLogout)
 
@@ -84,12 +86,8 @@ func TestAuthKeyLogoutAndReloginSameUser(t *testing.T) {
 
 			t.Logf("all clients logged out")
 
-			assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-				var err error
-				listNodes, err = headscale.ListNodes()
-				assert.NoError(ct, err)
-				assert.Equal(ct, nodeCountBeforeLogout, len(listNodes), "Node count should match before logout count")
-			}, 20*time.Second, 1*time.Second)
+			listNodes, err = headscale.ListNodes()
+			require.Equal(t, nodeCountBeforeLogout, len(listNodes))
 
 			for _, node := range listNodes {
 				assertLastSeenSet(t, node)
@@ -119,12 +117,8 @@ func TestAuthKeyLogoutAndReloginSameUser(t *testing.T) {
 				}
 			}
 
-			assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-				var err error
-				listNodes, err = headscale.ListNodes()
-				assert.NoError(ct, err)
-				assert.Equal(ct, nodeCountBeforeLogout, len(listNodes), "Node count should match after HTTPS reconnection")
-			}, 30*time.Second, 2*time.Second)
+			listNodes, err = headscale.ListNodes()
+			require.Equal(t, nodeCountBeforeLogout, len(listNodes))
 
 			for _, node := range listNodes {
 				assertLastSeenSet(t, node)
@@ -167,11 +161,12 @@ func TestAuthKeyLogoutAndReloginSameUser(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func assertLastSeenSet(t *testing.T, node *v1.Node) {
 	assert.NotNil(t, node)
-	assert.NotNil(t, node.GetLastSeen())
+	assert.NotNil(t, node.LastSeen)
 }
 
 // This test will first log in two sets of nodes to two sets of users, then
@@ -180,6 +175,7 @@ func assertLastSeenSet(t *testing.T, node *v1.Node) {
 // still has nodes, but they are not connected.
 func TestAuthKeyLogoutAndReloginNewUser(t *testing.T) {
 	IntegrationSkip(t)
+	t.Parallel()
 
 	spec := ScenarioSpec{
 		NodesPerUser: len(MustTestVersions),
@@ -208,7 +204,7 @@ func TestAuthKeyLogoutAndReloginNewUser(t *testing.T) {
 	assertNoErrGetHeadscale(t, err)
 
 	listNodes, err := headscale.ListNodes()
-	assert.Len(t, allClients, len(listNodes))
+	assert.Equal(t, len(listNodes), len(allClients))
 	nodeCountBeforeLogout := len(listNodes)
 	t.Logf("node count before logout: %d", nodeCountBeforeLogout)
 
@@ -242,34 +238,28 @@ func TestAuthKeyLogoutAndReloginNewUser(t *testing.T) {
 		}
 	}
 
-	var user1Nodes []*v1.Node
-	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		var err error
-		user1Nodes, err = headscale.ListNodes("user1")
-		assert.NoError(ct, err)
-		assert.Len(ct, user1Nodes, len(allClients), "User1 should have all clients after re-login")
-	}, 20*time.Second, 1*time.Second)
+	user1Nodes, err := headscale.ListNodes("user1")
+	assertNoErr(t, err)
+	assert.Len(t, user1Nodes, len(allClients))
 
 	// Validate that all the old nodes are still present with user2
-	var user2Nodes []*v1.Node
-	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		var err error
-		user2Nodes, err = headscale.ListNodes("user2")
-		assert.NoError(ct, err)
-		assert.Len(ct, user2Nodes, len(allClients)/2, "User2 should have half the clients")
-	}, 20*time.Second, 1*time.Second)
+	user2Nodes, err := headscale.ListNodes("user2")
+	assertNoErr(t, err)
+	assert.Len(t, user2Nodes, len(allClients)/2)
 
 	for _, client := range allClients {
-		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-			status, err := client.Status()
-			assert.NoError(ct, err, "Failed to get status for client %s", client.Hostname())
-			assert.Equal(ct, "user1@test.no", status.User[status.Self.UserID].LoginName, "Client %s should be logged in as user1", client.Hostname())
-		}, 30*time.Second, 2*time.Second)
+		status, err := client.Status()
+		if err != nil {
+			t.Fatalf("failed to get status for client %s: %s", client.Hostname(), err)
+		}
+
+		assert.Equal(t, "user1@test.no", status.User[status.Self.UserID].LoginName)
 	}
 }
 
 func TestAuthKeyLogoutAndReloginSameUserExpiredKey(t *testing.T) {
 	IntegrationSkip(t)
+	t.Parallel()
 
 	for _, https := range []bool{true, false} {
 		t.Run(fmt.Sprintf("with-https-%t", https), func(t *testing.T) {
@@ -313,7 +303,7 @@ func TestAuthKeyLogoutAndReloginSameUserExpiredKey(t *testing.T) {
 			assertNoErrGetHeadscale(t, err)
 
 			listNodes, err := headscale.ListNodes()
-			assert.Len(t, allClients, len(listNodes))
+			assert.Equal(t, len(listNodes), len(allClients))
 			nodeCountBeforeLogout := len(listNodes)
 			t.Logf("node count before logout: %d", nodeCountBeforeLogout)
 

@@ -5,9 +5,7 @@
     - `/etc/headscale`
     - `$HOME/.headscale`
     - the current working directory
-- To load the configuration from a different path, use:
-    - the command line flag `-c`, `--config`
-    - the environment variable `HEADSCALE_CONFIG`
+- Use the command line flag `-c`, `--config` to load the configuration from a different path
 - Validate the configuration file with: `headscale configtest`
 
 !!! example "Get the [example configuration from the GitHub repository](https://github.com/juanfont/headscale/blob/main/config-example.yaml)"

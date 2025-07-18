@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"github.com/juanfont/headscale/hscontrol/policy/matcher"
 	"net/netip"
 	"strings"
 	"testing"
@@ -9,7 +10,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
-	"github.com/juanfont/headscale/hscontrol/policy/matcher"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"

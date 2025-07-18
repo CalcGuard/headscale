@@ -60,6 +60,7 @@ func TestNodeCanApproveRoute(t *testing.T) {
 		route      netip.Prefix
 		policy     string
 		canApprove bool
+		skipV1     bool
 	}{
 		{
 			name:  "allow-all-routes-for-admin-user",
@@ -765,10 +766,10 @@ func TestNodeCanApproveRoute(t *testing.T) {
 			canApprove: false,
 		},
 		{
-			name:       "empty-policy",
-			node:       normalNode,
-			route:      p("192.168.1.0/24"),
-			policy:     `{"acls":[{"action":"accept","src":["*"],"dst":["*:*"]}]}`,
+			name:  "empty-policy",
+			node:  normalNode,
+			route: p("192.168.1.0/24"),
+			policy: `{"acls":[{"action":"accept","src":["*"],"dst":["*:*"]}]}`,
 			canApprove: false,
 		},
 	}
@@ -776,7 +777,7 @@ func TestNodeCanApproveRoute(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Initialize all policy manager implementations
-			policyManagers, err := PolicyManagersForTest([]byte(tt.policy), users, types.Nodes{&tt.node}.ViewSlice())
+			policyManagers, err := PolicyManagersForTest([]byte(tt.policy), users, types.Nodes{&tt.node})
 			if tt.name == "empty policy" {
 				// We expect this one to have a valid but empty policy
 				require.NoError(t, err)
@@ -788,8 +789,14 @@ func TestNodeCanApproveRoute(t *testing.T) {
 			}
 
 			for i, pm := range policyManagers {
-				t.Run(fmt.Sprintf("policy-index%d", i), func(t *testing.T) {
-					result := pm.NodeCanApproveRoute(tt.node.View(), tt.route)
+				versionNum := i + 1
+				if versionNum == 1 && tt.skipV1 {
+					// Skip V1 policy manager for specific tests
+					continue
+				}
+
+				t.Run(fmt.Sprintf("PolicyV%d", versionNum), func(t *testing.T) {
+					result := pm.NodeCanApproveRoute(&tt.node, tt.route)
 
 					if diff := cmp.Diff(tt.canApprove, result); diff != "" {
 						t.Errorf("NodeCanApproveRoute() mismatch (-want +got):\n%s", diff)

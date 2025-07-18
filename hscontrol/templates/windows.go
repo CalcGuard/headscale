@@ -1,6 +1,8 @@
 package templates
 
 import (
+	"fmt"
+
 	"github.com/chasefleming/elem-go"
 	"github.com/chasefleming/elem-go/attrs"
 )
@@ -29,7 +31,7 @@ func Windows(url string) *elem.Element {
 			),
 			elem.Pre(nil,
 				elem.Code(nil,
-					elem.Text("tailscale login --login-server "+url),
+					elem.Text(fmt.Sprintf(`tailscale login --login-server %s`, url)),
 				),
 			),
 		),

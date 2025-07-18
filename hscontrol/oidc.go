@@ -12,12 +12,13 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"encoding/json"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gorilla/mux"
 	"github.com/juanfont/headscale/hscontrol/db"
 	"github.com/juanfont/headscale/hscontrol/notifier"
-	"github.com/juanfont/headscale/hscontrol/state"
+	"github.com/juanfont/headscale/hscontrol/policy"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/util"
 	"github.com/rs/zerolog/log"
@@ -28,8 +29,6 @@ import (
 const (
 	randomByteSize           = 16
 	defaultOAuthOptionsCount = 3
-	registerCacheExpiration  = time.Minute * 15
-	registerCacheCleanup     = time.Minute * 20
 )
 
 var (
@@ -58,9 +57,11 @@ type RegistrationInfo struct {
 type AuthProviderOIDC struct {
 	serverURL         string
 	cfg               *types.OIDCConfig
-	state             *state.State
+	db                *db.HSDatabase
 	registrationCache *zcache.Cache[string, RegistrationInfo]
 	notifier          *notifier.Notifier
+	ipAlloc           *db.IPAllocator
+	polMan            policy.PolicyManager
 
 	oidcProvider *oidc.Provider
 	oauth2Config *oauth2.Config
@@ -70,8 +71,10 @@ func NewAuthProviderOIDC(
 	ctx context.Context,
 	serverURL string,
 	cfg *types.OIDCConfig,
-	state *state.State,
+	db *db.HSDatabase,
 	notif *notifier.Notifier,
+	ipAlloc *db.IPAllocator,
+	polMan policy.PolicyManager,
 ) (*AuthProviderOIDC, error) {
 	var err error
 	// grab oidc config if it hasn't been already
@@ -84,8 +87,11 @@ func NewAuthProviderOIDC(
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		Endpoint:     oidcProvider.Endpoint(),
-		RedirectURL:  strings.TrimSuffix(serverURL, "/") + "/oidc/callback",
-		Scopes:       cfg.Scope,
+		RedirectURL: fmt.Sprintf(
+			"%s/oidc/callback",
+			strings.TrimSuffix(serverURL, "/"),
+		),
+		Scopes: cfg.Scope,
 	}
 
 	registrationCache := zcache.New[string, RegistrationInfo](
@@ -96,9 +102,11 @@ func NewAuthProviderOIDC(
 	return &AuthProviderOIDC{
 		serverURL:         serverURL,
 		cfg:               cfg,
-		state:             state,
+		db:                db,
 		registrationCache: registrationCache,
 		notifier:          notif,
+		ipAlloc:           ipAlloc,
+		polMan:            polMan,
 
 		oidcProvider: oidcProvider,
 		oauth2Config: oauth2Config,
@@ -128,7 +136,7 @@ func (a *AuthProviderOIDC) RegisterHandler(
 	req *http.Request,
 ) {
 	vars := mux.Vars(req)
-	registrationIdStr := vars["registration_id"]
+	registrationIdStr, _ := vars["registration_id"]
 
 	// We need to make sure we dont open for XSS style injections, if the parameter that
 	// is passed as a key is not parsable/validated as a NodePublic key, then fail to render
@@ -229,11 +237,18 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 	}
 
 	oauth2Token, err := a.getOauth2Token(req.Context(), code, state)
+
 	if err != nil {
 		httpError(writer, err)
 		return
 	}
 
+	oauth2TokenJSON, err := json.MarshalIndent(oauth2Token, "", "  ")
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal oauth2token claims to JSON")
+	} else {
+		log.Debug().Msgf("Received OIDC oauth2token JSON: %s", oauth2TokenJSON)
+	}
 	idToken, err := a.extractIDToken(req.Context(), oauth2Token)
 	if err != nil {
 		httpError(writer, err)
@@ -297,29 +312,10 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 		}
 	}
 
-	user, policyChanged, err := a.createOrUpdateUserFromClaim(&claims)
+	user, err := a.createOrUpdateUserFromClaim(&claims)
 	if err != nil {
-		log.Error().
-			Err(err).
-			Caller().
-			Msgf("could not create or update user")
-		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		writer.WriteHeader(http.StatusInternalServerError)
-		_, werr := writer.Write([]byte("Could not create or update user"))
-		if werr != nil {
-			log.Error().
-				Caller().
-				Err(werr).
-				Msg("Failed to write response")
-		}
-
+		httpError(writer, err)
 		return
-	}
-
-	// Send policy update notifications if needed
-	if policyChanged {
-		ctx := types.NotifyCtx(context.Background(), "oidc-user-created", user.Name)
-		a.notifier.NotifyAll(ctx, types.UpdateFull())
 	}
 
 	// TODO(kradalby): Is this comment right?
@@ -360,7 +356,6 @@ func (a *AuthProviderOIDC) OIDCCallbackHandler(
 	// Neither node nor machine key was found in the state cache meaning
 	// that we could not reauth nor register the node.
 	httpError(writer, NewHTTPError(http.StatusGone, "login session expired, try again", nil))
-
 	return
 }
 
@@ -399,7 +394,6 @@ func (a *AuthProviderOIDC) getOauth2Token(
 	if err != nil {
 		return nil, NewHTTPError(http.StatusForbidden, "invalid code", fmt.Errorf("could not exchange code for token: %w", err))
 	}
-
 	return oauth2Token, err
 }
 
@@ -485,40 +479,31 @@ func (a *AuthProviderOIDC) getRegistrationIDFromState(state string) *types.Regis
 
 func (a *AuthProviderOIDC) createOrUpdateUserFromClaim(
 	claims *types.OIDCClaims,
-) (*types.User, bool, error) {
+) (*types.User, error) {
 	var user *types.User
 	var err error
-	var newUser bool
-	var policyChanged bool
-	user, err = a.state.GetUserByOIDCIdentifier(claims.Identifier())
+	user, err = a.db.GetUserByOIDCIdentifier(claims.Identifier())
 	if err != nil && !errors.Is(err, db.ErrUserNotFound) {
-		return nil, false, fmt.Errorf("creating or updating user: %w", err)
+		return nil, fmt.Errorf("creating or updating user: %w", err)
 	}
 
 	// if the user is still not found, create a new empty user.
 	if user == nil {
-		newUser = true
 		user = &types.User{}
 	}
 
 	user.FromClaim(claims)
-
-	if newUser {
-		user, policyChanged, err = a.state.CreateUser(*user)
-		if err != nil {
-			return nil, false, fmt.Errorf("creating user: %w", err)
-		}
-	} else {
-		_, policyChanged, err = a.state.UpdateUser(types.UserID(user.ID), func(u *types.User) error {
-			*u = *user
-			return nil
-		})
-		if err != nil {
-			return nil, false, fmt.Errorf("updating user: %w", err)
-		}
+	err = a.db.DB.Save(user).Error
+	if err != nil {
+		return nil, fmt.Errorf("creating or updating user: %w", err)
 	}
 
-	return user, policyChanged, nil
+	err = usersChangedHook(a.db, a.polMan, a.notifier)
+	if err != nil {
+		return nil, fmt.Errorf("updating resources using user: %w", err)
+	}
+
+	return user, nil
 }
 
 func (a *AuthProviderOIDC) handleRegistration(
@@ -526,14 +511,28 @@ func (a *AuthProviderOIDC) handleRegistration(
 	registrationID types.RegistrationID,
 	expiry time.Time,
 ) (bool, error) {
-	node, newNode, err := a.state.HandleNodeFromAuthPath(
+	ipv4, ipv6, err := a.ipAlloc.Next()
+	if err != nil {
+		return false, err
+	}
+
+	node, newNode, err := a.db.HandleNodeFromAuthPath(
 		registrationID,
 		types.UserID(user.ID),
 		&expiry,
 		util.RegisterMethodOIDC,
+		ipv4, ipv6,
 	)
 	if err != nil {
 		return false, fmt.Errorf("could not register node: %w", err)
+	}
+
+	// Send an update to all nodes if this is a new node that they need to know
+	// about.
+	// If this is a refresh, just send new expiry updates.
+	updateSent, err := nodesChangedHook(a.db, a.polMan, a.notifier)
+	if err != nil {
+		return false, fmt.Errorf("updating resources using node: %w", err)
 	}
 
 	// This is a bit of a back and forth, but we have a bit of a chicken and egg
@@ -542,24 +541,17 @@ func (a *AuthProviderOIDC) handleRegistration(
 	// in the database, then add it to the policy manager and then we can
 	// approve the route. This means we get this dance where the node is
 	// first added to the database, then we add it to the policy manager via
-	// SaveNode (which automatically updates the policy manager) and then we can auto approve the routes.
+	// nodesChangedHook and then we can auto approve the routes.
 	// As that only approves the struct object, we need to save it again and
 	// ensure we send an update.
 	// This works, but might be another good candidate for doing some sort of
 	// eventbus.
-	routesChanged := a.state.AutoApproveRoutes(node)
-	_, policyChanged, err := a.state.SaveNode(node)
-	if err != nil {
+	routesChanged := policy.AutoApproveRoutes(a.polMan, node)
+	if err := a.db.DB.Save(node).Error; err != nil {
 		return false, fmt.Errorf("saving auto approved routes to node: %w", err)
 	}
 
-	// Send policy update notifications if needed (from SaveNode or route changes)
-	if policyChanged {
-		ctx := types.NotifyCtx(context.Background(), "oidc-nodes-change", "all")
-		a.notifier.NotifyAll(ctx, types.UpdateFull())
-	}
-
-	if routesChanged {
+	if !updateSent || routesChanged {
 		ctx := types.NotifyCtx(context.Background(), "oidc-expiry-self", node.Hostname)
 		a.notifier.NotifyByNodeID(
 			ctx,

@@ -2,7 +2,6 @@ package hscontrol
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -71,7 +70,7 @@ func runTailSQLService(ctx context.Context, logf logger.Logf, stateDir, dbPath s
 		// When serving TLS, add a redirect from HTTP on port 80 to HTTPS on 443.
 		certDomains := tsNode.CertDomains()
 		if len(certDomains) == 0 {
-			return errors.New("no cert domains available for HTTPS")
+			return fmt.Errorf("no cert domains available for HTTPS")
 		}
 		base := "https://" + certDomains[0]
 		go http.Serve(lst, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -93,9 +92,8 @@ func runTailSQLService(ctx context.Context, logf logger.Logf, stateDir, dbPath s
 	mux := tsql.NewMux()
 	tsweb.Debugger(mux)
 	go http.Serve(lst, mux)
-	logf("TailSQL started")
+	logf("ailSQL started")
 	<-ctx.Done()
 	logf("TailSQL shutting down...")
-
 	return tsNode.Close()
 }
